@@ -2,26 +2,96 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
-
-body {
-  color: var(--foreground);
-  background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
-}
-
 @layer utilities {
   .text-balance {
     text-wrap: balance;
+  }
+}
+
+@layer base {
+  :root {
+    /* ── Decide warm neutral palette ───────────────────────── */
+    --background: #FAF7F2;
+    --foreground: #1F1A15;
+    --card: #FFFFFF;
+    --card-foreground: #1F1A15;
+    --popover: #FFFFFF;
+    --popover-foreground: #1F1A15;
+    --primary: #1F1A15;
+    --primary-foreground: #FAF7F2;
+    --secondary: #F2EDE3;
+    --secondary-foreground: #4A4035;
+    --muted: #F2EDE3;
+    --muted-foreground: #8A7D6C;
+    --accent: #F2EDE3;
+    --accent-foreground: #4A4035;
+    --destructive: #991B1B;
+    --destructive-foreground: #FAF7F2;
+    --border: #E8E2D8;
+    --input: #E8E2D8;
+    --ring: #C2410C;
+    --radius: 0.75rem;
+
+    /* ── Decide extended surfaces ──────────────────────────── */
+    --decide-surface-subtle: #FBF8F2;
+    --decide-surface-warm: #F2EDE3;
+    --decide-border: #E8E2D8;
+    --decide-border-warm: #D6CFC1;
+    --decide-text-secondary: #6B6358;
+    --decide-text-tertiary: #4A4035;
+    --decide-text-muted: #8A7D6C;
+    --decide-text-faint: #B8AE9B;
+
+    /* ── Decide accent ─────────────────────────────────────── */
+    --decide-accent: #C2410C;
+    --decide-accent-dark: #9A3412;
+
+    /* ── Category color pairs ──────────────────────────────── */
+    --cat-eat-color: #9A3412;
+    --cat-eat-bg: #FEF3E7;
+    --cat-watch-color: #3730A3;
+    --cat-watch-bg: #EEF2FF;
+    --cat-read-color: #065F46;
+    --cat-read-bg: #ECFDF5;
+    --cat-do-color: #0C4A6E;
+    --cat-do-bg: #E0F2FE;
+    --cat-listen-color: #7C2D12;
+    --cat-listen-bg: #FEF2EE;
+    --cat-connect-color: #831843;
+    --cat-connect-bg: #FCE7F3;
+
+    /* ── Typography ────────────────────────────────────────── */
+    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+
+  /* Dark mode mirrors light — not a goal for Week 1 */
+  .dark {
+    --background: #FAF7F2;
+    --foreground: #1F1A15;
+    --card: #FFFFFF;
+    --card-foreground: #1F1A15;
+    --popover: #FFFFFF;
+    --popover-foreground: #1F1A15;
+    --primary: #1F1A15;
+    --primary-foreground: #FAF7F2;
+    --secondary: #F2EDE3;
+    --secondary-foreground: #4A4035;
+    --muted: #F2EDE3;
+    --muted-foreground: #8A7D6C;
+    --accent: #F2EDE3;
+    --accent-foreground: #4A4035;
+    --destructive: #991B1B;
+    --destructive-foreground: #FAF7F2;
+    --border: #E8E2D8;
+    --input: #E8E2D8;
+    --ring: #C2410C;
+  }
+
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--font-sans);
   }
 }
