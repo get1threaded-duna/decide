@@ -18,7 +18,7 @@ const DEFAULT_INTERESTS = new Set([
 export default async function DashboardPage({
   searchParams,
 }: {
-  searchParams?: { ctx?: string };
+  searchParams?: { ctx?: string; upgraded?: string };
 }) {
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -29,14 +29,23 @@ export default async function DashboardPage({
     : DEFAULT_CONTEXT_ID;
   const ctx = contexts[activeCtxId];
 
-  const [{ data: savedRows }, { data: logRows }] = await Promise.all([
+  const [{ data: savedRows }, { data: logRows }, { data: appUser }, { data: profile }] = await Promise.all([
     supabase.from("saved_items").select("item_id").eq("user_id", user.id),
     supabase
       .from("feedback_log")
       .select("action, item_id, item_snapshot, ts")
       .eq("user_id", user.id)
       .order("ts", { ascending: true }),
+    supabase.from("users").select("plan").eq("id", user.id).maybeSingle(),
+    supabase.from("profiles").select("interests").eq("user_id", user.id).maybeSingle(),
   ]);
+
+  const plan = (appUser?.plan ?? "free") as "free" | "pro";
+  const justUpgraded = searchParams?.upgraded === "1";
+
+  const storedInterests = Array.isArray(profile?.interests) ? profile.interests as string[] : [];
+  const interestSet =
+    storedInterests.length > 0 ? new Set(storedInterests) : DEFAULT_INTERESTS;
 
   const savedIds = new Set((savedRows ?? []).map(r => r.item_id as string));
 
@@ -56,12 +65,12 @@ export default async function DashboardPage({
   const patterns = derivePatterns(log);
 
   const picks: Record<Modality, ReturnType<typeof pick>> = {
-    eat:     pick("eat",     ctx, 0, DEFAULT_INTERESTS, feedback),
-    watch:   pick("watch",   ctx, 0, DEFAULT_INTERESTS, feedback),
-    listen:  pick("listen",  ctx, 0, DEFAULT_INTERESTS, feedback),
-    read:    pick("read",    ctx, 0, DEFAULT_INTERESTS, feedback),
-    do:      pick("do",      ctx, 0, DEFAULT_INTERESTS, feedback),
-    connect: pick("connect", ctx, 0, DEFAULT_INTERESTS, feedback),
+    eat:     pick("eat",     ctx, 0, interestSet, feedback),
+    watch:   pick("watch",   ctx, 0, interestSet, feedback),
+    listen:  pick("listen",  ctx, 0, interestSet, feedback),
+    read:    pick("read",    ctx, 0, interestSet, feedback),
+    do:      pick("do",      ctx, 0, interestSet, feedback),
+    connect: pick("connect", ctx, 0, interestSet, feedback),
   };
 
   const presets = Object.values(contexts).map(c => ({
@@ -69,7 +78,7 @@ export default async function DashboardPage({
     label: c.label,
     href: `/dashboard?ctx=${c.id}`,
   }));
-  const interestsArr = Array.from(DEFAULT_INTERESTS).sort();
+  const interestsArr = Array.from(interestSet).sort();
   const reasonKey = (id: string) =>
     `${id}::${ctx.id}::${interestsArr.join(",")}::s${patterns.saveCount}`;
 
@@ -82,15 +91,38 @@ export default async function DashboardPage({
             <span className="inline-block h-2 w-2 rounded-full bg-[var(--decide-accent)]" />
             <span className="font-serif text-xl font-medium text-foreground">Decide</span>
           </div>
-          <form action="/auth/signout" method="post">
-            <button
-              type="submit"
-              className="text-xs text-[var(--decide-text-muted)] hover:text-foreground transition-colors"
-            >
-              Sign out
-            </button>
-          </form>
+          <nav className="flex items-center gap-3">
+            {plan === "pro" ? (
+              <a
+                href="/tune"
+                className="text-xs text-[var(--decide-text-tertiary)] hover:text-foreground transition-colors"
+              >
+                Tune me
+              </a>
+            ) : (
+              <a
+                href="/pricing"
+                className="rounded-full border border-[var(--decide-accent)] px-2.5 py-1 text-xs text-[var(--decide-accent)] hover:bg-[var(--decide-accent)] hover:text-background transition-colors"
+              >
+                Upgrade to Pro
+              </a>
+            )}
+            <form action="/auth/signout" method="post">
+              <button
+                type="submit"
+                className="text-xs text-[var(--decide-text-muted)] hover:text-foreground transition-colors"
+              >
+                Sign out
+              </button>
+            </form>
+          </nav>
         </header>
+
+        {justUpgraded && (
+          <div className="rounded-xl border border-[#A7E3C5] bg-[#ECFDF5] px-4 py-3 text-sm text-[#065F46]">
+            Welcome to Decide Pro. The Tune-me panel is now in the top right.
+          </div>
+        )}
 
         <ContextBar
           location={ctx.loc}
