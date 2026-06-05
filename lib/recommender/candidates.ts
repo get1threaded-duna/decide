@@ -52,6 +52,13 @@ const CATEGORY_NOUN: Record<Category, string> = {
   connect: "relational moves — texts to send, calls to make, plans to set",
 };
 
+// Categories where every item must be physically reachable from the user.
+// Cooking-at-home picks under "eat" count as reachable (the kitchen is local);
+// the radius constraint is enforced via prompt language rather than a hard filter.
+const LOCATION_BOUND_CATEGORIES: ReadonlySet<Category> = new Set<Category>(["eat", "do", "connect"]);
+
+const DEFAULT_RADIUS_MI = 25;
+
 function slugify(title: string, idx: number): string {
   const base = title
     .toLowerCase()
@@ -75,13 +82,22 @@ export async function generateCandidates(
     tags: it.tags.slice(0, 6),
   }));
 
+  const isLocationBound = LOCATION_BOUND_CATEGORIES.has(category);
+  const localityRule = isLocationBound
+    ? `LOCATION (HARD CONSTRAINT)
+The user is in ${ctx.location}. EVERY item must be physically reachable from there within roughly ${DEFAULT_RADIUS_MI} miles. Use real neighborhood, street, venue, or business names that actually exist in or near ${ctx.location}. If a cook-at-home option fits the category, that counts as "reachable" since the kitchen is local. Do NOT recommend places in other cities, other metros, or other countries. If you cannot think of ${DEFAULT_RADIUS_MI}-mile options, broaden to the nearest metro center but never beyond.`
+    : `LOCATION
+The user is in ${ctx.location}, but ${category} is location-independent (it streams / reads / plays anywhere). Recommend the best fit regardless of geography.`;
+
   const system = `You generate fresh recommendations for a lifestyle app's "${category}" cards (${CATEGORY_NOUN[category]}). Items must be specific — real places, real titles, real things — not generic categories. Output is consumed by an algorithm: strict JSON, no prose.
+
+${localityRule}
 
 RULES:
 - Generate EXACTLY 8 distinct items.
 - Each item: { "title", "meta", "tags", "fallback" }. Do not include an "id" — the server assigns one.
 - title: 2–8 words, specific.
-- meta: ~6–14 words, with a concrete detail (price, runtime, location, duration, distance, channel).
+- meta: ~6–14 words, with a concrete detail (price, runtime, location, duration, distance, channel).${isLocationBound ? " For location-bound picks, include the neighborhood or distance from the user where possible." : ""}
 - tags: 4–8 lowercase single-word or kebab-case tokens. MUST include the time-of-day "${ctx.tod}" and the day class "${ctx.dow}" where natural, plus a weather-character tag (one of: clear, cloudy, rainy, snowy, foggy) when relevant. Interest tags should rhyme with the user's stated interests and save patterns. Avoid multi-clause tags.
 - fallback: ONE sentence, ≤ 16 words, plain, no exclamation marks, no emojis.
 - Do NOT recommend items that overlap conceptually with anything in ALREADY-SHOWN. New items only.

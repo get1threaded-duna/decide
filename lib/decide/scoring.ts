@@ -5,6 +5,11 @@ import type { CandidateItem } from "@/lib/recommender/candidates";
 
 export type FeedbackMap = Record<string, "save" | "swap" | "ignore" | "open" | undefined>;
 
+// Catalog-vocabulary place tags. An item that carries one of these is claiming
+// to be physically anchored to that city/metro; an item without any of them is
+// location-free (movies, books, podcasts, generic recipes).
+const PLACE_TAGS: ReadonlySet<string> = new Set(["dc", "la", "tokyo"]);
+
 export function score(
   item: Item,
   ctx: DecideContext,
@@ -22,6 +27,14 @@ export function score(
   interests.forEach(i => { if (t.includes(i)) s += 1; });
   if (feedback[item.id] === "save") s += 5;
   if (feedback[item.id] === "ignore") s -= 10;
+
+  // Locality penalty: if the item is anchored to a place that isn't the user's
+  // current city, drop it well below any location-free item. -8 outweighs the
+  // +4 city match plus typical tod/dow/season bonuses so the item only surfaces
+  // when nothing else is available.
+  const itemPlaces = t.filter(tag => PLACE_TAGS.has(tag));
+  if (itemPlaces.length > 0 && !itemPlaces.includes(ctx.city)) s -= 8;
+
   return s;
 }
 
