@@ -5,6 +5,7 @@ import { pick, MODALITIES, type FeedbackMap } from "@/lib/decide/scoring";
 import { derivePatterns } from "@/lib/decide/patterns";
 import type { FeedbackEntry, Modality } from "@/lib/decide/types";
 import { ContextBar } from "@/components/decide/ContextBar";
+import { LiveContextBar } from "@/components/decide/LiveContextBar";
 import { ContextSwitcher } from "@/components/decide/ContextSwitcher";
 import { NoticingBanner } from "@/components/decide/NoticingBanner";
 import { FeedCardLive } from "./FeedCardLive";
@@ -124,13 +125,19 @@ export default async function DashboardPage({
           </div>
         )}
 
-        <ContextBar
-          location={ctx.loc}
-          time={ctx.time}
-          weather={ctx.weather}
-          season={ctx.season}
-          weatherIcon={ctx.weatherIcon}
-        />
+        {activeCtxId === "home" ? (
+          <LiveContextBar
+            fallback={{ loc: ctx.loc, weather: ctx.weather, weatherIcon: ctx.weatherIcon }}
+          />
+        ) : (
+          <ContextBar
+            location={ctx.loc}
+            time={ctx.time}
+            weather={ctx.weather}
+            season={ctx.season}
+            weatherIcon={ctx.weatherIcon}
+          />
+        )}
 
         <div>
           <h1 className="font-serif text-3xl font-medium tracking-tight text-foreground">
