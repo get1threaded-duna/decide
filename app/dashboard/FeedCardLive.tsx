@@ -20,6 +20,7 @@ export interface CandidateItem {
   id: string;
   title: string;
   meta: string;
+  tags: string[];
   fallback: string;
 }
 
@@ -93,7 +94,15 @@ export function FeedCardLive({
         const res = await fetch("/api/reason", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ itemId: current.id, category: modality, contextId, interests }),
+          body: JSON.stringify({
+            itemId: current.id,
+            category: modality,
+            contextId,
+            interests,
+            title: current.title,
+            meta: current.meta,
+            fallback: current.fallback,
+          }),
           signal: controller.signal,
         });
         if (!res.ok || !res.body) throw new Error(`reason fetch failed: ${res.status}`);
@@ -123,6 +132,7 @@ export function FeedCardLive({
   const handleSave = () => {
     if (!current) return;
     const id = current.id;
+    const snapshot = { title: current.title, tags: current.tags ?? [] };
     setSessionSaved((s) => {
       const next = new Set(s);
       if (savedSet.has(id) || next.has(id)) next.delete(id);
@@ -130,16 +140,17 @@ export function FeedCardLive({
       return next;
     });
     startTransition(async () => {
-      await toggleSave(id, modality);
+      await toggleSave(id, modality, snapshot);
     });
   };
 
   const handleSwap = async () => {
     if (!current || isFetchingMore) return;
     const swappedId = current.id;
+    const snapshot = { title: current.title, tags: current.tags ?? [] };
 
     // Fire-and-forget feedback log; UI shouldn't wait.
-    void logSwap(swappedId, modality);
+    void logSwap(swappedId, modality, snapshot);
 
     const nextIdx = idx + 1;
     if (nextIdx < pool.length) {

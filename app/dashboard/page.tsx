@@ -140,6 +140,7 @@ export default async function DashboardPage({
     id: it.id,
     title: it.title,
     meta: it.meta,
+    tags: it.tags,
     fallback: it.fallback,
   });
   const candidates: Record<Modality, ReturnType<typeof toCandidate>[]> = {
@@ -163,10 +164,16 @@ export default async function DashboardPage({
   // Batch-generate the initial reason for the top card in each modality.
   // Swap-time re-fetches still go through /api/reason for single-card streaming.
   const orderedTopPicks: CardItem[] = MODALITIES
-    .map(cat => {
+    .map<CardItem | null>(cat => {
       const top = candidates[cat][0];
       if (!top) return null;
-      return { ...top, category: cat };
+      return {
+        id: top.id,
+        title: top.title,
+        meta: top.meta,
+        category: cat,
+        fallback: top.fallback,
+      };
     })
     .filter((c): c is CardItem => c !== null);
 

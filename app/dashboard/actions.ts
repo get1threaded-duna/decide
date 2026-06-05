@@ -2,16 +2,17 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { findItem } from "@/lib/decide/catalog";
 import type { Modality } from "@/lib/decide/types";
 
-export async function toggleSave(itemId: string, category: Modality) {
+export interface ItemSnapshot {
+  title: string;
+  tags: string[];
+}
+
+export async function toggleSave(itemId: string, category: Modality, snapshot: ItemSnapshot) {
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Not authenticated");
-
-  const item = findItem(itemId);
-  if (!item) throw new Error(`Unknown item: ${itemId}`);
 
   const { data: existing } = await supabase
     .from("saved_items")
@@ -37,9 +38,9 @@ export async function toggleSave(itemId: string, category: Modality) {
     item_id: itemId,
     action: "save",
     item_snapshot: {
-      id: item.id,
-      title: item.title,
-      tags: item.tags,
+      id: itemId,
+      title: snapshot.title,
+      tags: snapshot.tags,
       category,
     },
   });
@@ -48,43 +49,37 @@ export async function toggleSave(itemId: string, category: Modality) {
   return { saved: true };
 }
 
-export async function logSwap(itemId: string, category: Modality) {
+export async function logSwap(itemId: string, category: Modality, snapshot: ItemSnapshot) {
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Not authenticated");
-
-  const item = findItem(itemId);
-  if (!item) throw new Error(`Unknown item: ${itemId}`);
 
   await supabase.from("feedback_log").insert({
     user_id: user.id,
     item_id: itemId,
     action: "swap",
     item_snapshot: {
-      id: item.id,
-      title: item.title,
-      tags: item.tags,
+      id: itemId,
+      title: snapshot.title,
+      tags: snapshot.tags,
       category,
     },
   });
 }
 
-export async function logIgnore(itemId: string, category: Modality) {
+export async function logIgnore(itemId: string, category: Modality, snapshot: ItemSnapshot) {
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error("Not authenticated");
-
-  const item = findItem(itemId);
-  if (!item) throw new Error(`Unknown item: ${itemId}`);
 
   await supabase.from("feedback_log").insert({
     user_id: user.id,
     item_id: itemId,
     action: "ignore",
     item_snapshot: {
-      id: item.id,
-      title: item.title,
-      tags: item.tags,
+      id: itemId,
+      title: snapshot.title,
+      tags: snapshot.tags,
       category,
     },
   });

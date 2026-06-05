@@ -1,7 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { findItem } from "@/lib/decide/catalog";
 import { contexts } from "@/lib/decide/contexts";
 import { derivePatterns } from "@/lib/decide/patterns";
 import type { FeedbackEntry, Modality } from "@/lib/decide/types";
@@ -33,11 +32,22 @@ export async function POST(req: NextRequest) {
     category?: Modality;
     contextId?: string;
     interests?: string[];
+    title?: string;
+    meta?: string;
+    fallback?: string;
   };
 
-  const item = body.itemId ? findItem(body.itemId) : undefined;
   const ctx = body.contextId ? contexts[body.contextId] : undefined;
-  if (!item || !ctx) return new Response("Bad request", { status: 400 });
+  if (!body.itemId || !body.title || !ctx) {
+    return new Response("Bad request", { status: 400 });
+  }
+
+  const item = {
+    id: body.itemId,
+    title: body.title,
+    meta: body.meta ?? "",
+    fallback: body.fallback ?? "",
+  };
 
   // Pull this user's feedback log to derive patterns
   const { data: logRows } = await supabase
