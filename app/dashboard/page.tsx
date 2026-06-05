@@ -60,8 +60,16 @@ function deriveUserContext(
     location = fallback.loc;
   }
 
+  const desc = description.toLowerCase();
+  const weatherTag =
+    desc.includes("rain") || desc.includes("drizzle") ? "rainy"
+    : desc.includes("snow") ? "snowy"
+    : desc.includes("fog") ? "foggy"
+    : desc.includes("cloud") ? "cloudy"
+    : "clear";
+
   return {
-    weather: { tempF, description, icon, location },
+    weather: { tempF, description, icon, location, weatherTag },
     localTime,
     tod,
     dow,
@@ -247,6 +255,7 @@ export default async function DashboardPage({
                 savedIds={savedIdArr}
                 reasonKeyBase={reasonKeyBase}
                 initialReason={top ? batchReasons[top.id] : undefined}
+                userContext={userCtx}
               />
             );
           })}

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { Bookmark, RefreshCw, Sparkles, ChefHat, Tv, BookOpen, Footprints, Headphones, HeartHandshake } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Modality } from "@/lib/decide/types";
+import type { UserContext } from "@/lib/recommender/prompt";
 import { logSwap, toggleSave } from "./actions";
 
 const MODALITY_META: Record<Modality, { label: string; Icon: React.ElementType; colorVar: string; bgVar: string }> = {
@@ -31,6 +32,8 @@ interface FeedCardLiveProps {
   reasonKeyBase: string;
   /** Reason text pre-resolved server-side for the FIRST card; skips the streaming fetch on first paint. */
   initialReason?: string;
+  /** Live user context — required for swap pool refresh via /api/picks. */
+  userContext?: UserContext;
 }
 
 export function FeedCardLive({
@@ -41,12 +44,16 @@ export function FeedCardLive({
   savedIds,
   reasonKeyBase,
   initialReason,
+  userContext,
 }: FeedCardLiveProps) {
   const m = MODALITY_META[modality];
   const isConnect = modality === "connect";
 
   const [pool, setPool] = useState<CandidateItem[]>(candidates);
   const [idx, setIdx] = useState(0);
+  const [reasonCache, setReasonCache] = useState<Record<string, string>>(() =>
+    initialReason && candidates[0] ? { [candidates[0].id]: initialReason } : {},
+  );
   const [reason, setReason] = useState(initialReason ?? "");
   const [streaming, setStreaming] = useState(!initialReason);
   const [isFetchingMore, setIsFetchingMore] = useState(false);
@@ -56,7 +63,6 @@ export function FeedCardLive({
   const reasonKey = current ? `${current.id}::${reasonKeyBase}` : "";
 
   const activeKeyRef = useRef(reasonKey);
-  const initialReasonIdRef = useRef(initialReason && pool[0] ? pool[0].id : null);
   const savedSet = useMemo(() => new Set(savedIds), [savedIds]);
 
   // Track in-session saves so the Save chip updates immediately after a click
@@ -66,11 +72,12 @@ export function FeedCardLive({
 
   useEffect(() => {
     if (!current) return;
-    // Use the server-batched reason for the initial item only. Once user swaps
-    // (or the initial item is no longer current), fall back to /api/reason streaming.
-    if (current.id === initialReasonIdRef.current && initialReason) {
+    // Server-batched reasons (initial item or pool-refresh result) are pre-resolved.
+    // Paint them immediately and skip streaming.
+    const cached = reasonCache[current.id];
+    if (cached) {
       activeKeyRef.current = reasonKey;
-      setReason(initialReason);
+      setReason(cached);
       setStreaming(false);
       return;
     }
@@ -111,7 +118,7 @@ export function FeedCardLive({
     })();
 
     return () => controller.abort();
-  }, [reasonKey, current, modality, contextId, interests, initialReason]);
+  }, [reasonKey, current, modality, contextId, interests, reasonCache]);
 
   const handleSave = () => {
     if (!current) return;
@@ -140,28 +147,38 @@ export function FeedCardLive({
       return;
     }
 
-    // Pool exhausted — fetch more, excluding everything we've already shown.
+    // Pool exhausted — mint a fresh batch from /api/picks.
+    // Requires userContext; without it, just cycle.
+    if (!userContext) {
+      setIdx(0);
+      return;
+    }
+
     setIsFetchingMore(true);
     try {
       const res = await fetch("/api/picks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          modality,
-          contextId,
-          exclude: pool.map((c) => c.id),
-          count: 5,
+          category: modality,
+          seenIds: pool.map((c) => c.id),
+          context: userContext,
+          poolSize: 5,
         }),
       });
       if (res.ok) {
-        const { items } = (await res.json()) as { items: CandidateItem[] };
-        if (items.length > 0) {
-          setPool((p) => [...p, ...items]);
+        const data = (await res.json()) as {
+          candidates: CandidateItem[];
+          reasons: Record<string, string>;
+        };
+        if (data.candidates.length > 0) {
+          setPool((p) => [...p, ...data.candidates]);
+          setReasonCache((c) => ({ ...c, ...data.reasons }));
           setIdx(nextIdx);
           return;
         }
       }
-      // No new items available — cycle back to the top of the existing pool.
+      // Nothing usable came back — cycle to the top of the existing pool.
       setIdx(0);
     } finally {
       setIsFetchingMore(false);

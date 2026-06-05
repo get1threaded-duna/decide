@@ -20,6 +20,8 @@ export interface WeatherContext {
   description: string;
   icon: string;
   location: string;
+  /** Optional shorthand derived from description, e.g. "rainy" | "cloudy" | "clear". Used by contextual scoring. */
+  weatherTag?: string;
 }
 
 export interface UserContext {
