@@ -7,6 +7,7 @@ import type { FeedbackEntry, Modality } from "@/lib/decide/types";
 import { ContextBar } from "@/components/decide/ContextBar";
 import { LiveContextBar } from "@/components/decide/LiveContextBar";
 import { ContextSwitcher } from "@/components/decide/ContextSwitcher";
+import { AvatarMenu } from "@/components/decide/AvatarMenu";
 import { NoticingBanner } from "@/components/decide/NoticingBanner";
 import { FeedCardLive } from "./FeedCardLive";
 
@@ -94,12 +95,7 @@ export default async function DashboardPage({
           </div>
           <nav className="flex items-center gap-3">
             {plan === "pro" ? (
-              <a
-                href="/tune"
-                className="text-xs text-[var(--decide-text-tertiary)] hover:text-foreground transition-colors"
-              >
-                Tune me
-              </a>
+              <AvatarMenu email={user.email ?? ""} />
             ) : (
               <a
                 href="/pricing"
