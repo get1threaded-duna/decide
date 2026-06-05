@@ -29,6 +29,8 @@ interface FeedCardLiveProps {
   interests: string[];
   savedIds: string[];
   reasonKeyBase: string;
+  /** Reason text pre-resolved server-side for the FIRST card; skips the streaming fetch on first paint. */
+  initialReason?: string;
 }
 
 export function FeedCardLive({
@@ -38,14 +40,15 @@ export function FeedCardLive({
   interests,
   savedIds,
   reasonKeyBase,
+  initialReason,
 }: FeedCardLiveProps) {
   const m = MODALITY_META[modality];
   const isConnect = modality === "connect";
 
   const [pool, setPool] = useState<CandidateItem[]>(candidates);
   const [idx, setIdx] = useState(0);
-  const [reason, setReason] = useState("");
-  const [streaming, setStreaming] = useState(true);
+  const [reason, setReason] = useState(initialReason ?? "");
+  const [streaming, setStreaming] = useState(!initialReason);
   const [isFetchingMore, setIsFetchingMore] = useState(false);
   const [, startTransition] = useTransition();
 
@@ -53,6 +56,7 @@ export function FeedCardLive({
   const reasonKey = current ? `${current.id}::${reasonKeyBase}` : "";
 
   const activeKeyRef = useRef(reasonKey);
+  const initialReasonIdRef = useRef(initialReason && pool[0] ? pool[0].id : null);
   const savedSet = useMemo(() => new Set(savedIds), [savedIds]);
 
   // Track in-session saves so the Save chip updates immediately after a click
@@ -62,6 +66,14 @@ export function FeedCardLive({
 
   useEffect(() => {
     if (!current) return;
+    // Use the server-batched reason for the initial item only. Once user swaps
+    // (or the initial item is no longer current), fall back to /api/reason streaming.
+    if (current.id === initialReasonIdRef.current && initialReason) {
+      activeKeyRef.current = reasonKey;
+      setReason(initialReason);
+      setStreaming(false);
+      return;
+    }
     activeKeyRef.current = reasonKey;
     setReason("");
     setStreaming(true);
@@ -99,7 +111,7 @@ export function FeedCardLive({
     })();
 
     return () => controller.abort();
-  }, [reasonKey, current, modality, contextId, interests]);
+  }, [reasonKey, current, modality, contextId, interests, initialReason]);
 
   const handleSave = () => {
     if (!current) return;
