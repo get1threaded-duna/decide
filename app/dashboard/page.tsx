@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { contexts, DEFAULT_CONTEXT_ID } from "@/lib/decide/contexts";
-import { pick, MODALITIES, type FeedbackMap } from "@/lib/decide/scoring";
+import { pickMany, MODALITIES, type FeedbackMap } from "@/lib/decide/scoring";
 import { derivePatterns } from "@/lib/decide/patterns";
 import type { FeedbackEntry, Modality } from "@/lib/decide/types";
 import { ContextBar } from "@/components/decide/ContextBar";
@@ -66,13 +66,19 @@ export default async function DashboardPage({
     }));
   const patterns = derivePatterns(log);
 
-  const picks: Record<Modality, ReturnType<typeof pick>> = {
-    eat:     pick("eat",     ctx, 0, interestSet, feedback),
-    watch:   pick("watch",   ctx, 0, interestSet, feedback),
-    listen:  pick("listen",  ctx, 0, interestSet, feedback),
-    read:    pick("read",    ctx, 0, interestSet, feedback),
-    do:      pick("do",      ctx, 0, interestSet, feedback),
-    connect: pick("connect", ctx, 0, interestSet, feedback),
+  const toCandidate = (it: ReturnType<typeof pickMany>[number]) => ({
+    id: it.id,
+    title: it.title,
+    meta: it.meta,
+    fallback: it.fallback,
+  });
+  const candidates: Record<Modality, ReturnType<typeof toCandidate>[]> = {
+    eat:     pickMany("eat",     ctx, 5, interestSet, feedback).map(toCandidate),
+    watch:   pickMany("watch",   ctx, 5, interestSet, feedback).map(toCandidate),
+    listen:  pickMany("listen",  ctx, 5, interestSet, feedback).map(toCandidate),
+    read:    pickMany("read",    ctx, 5, interestSet, feedback).map(toCandidate),
+    do:      pickMany("do",      ctx, 5, interestSet, feedback).map(toCandidate),
+    connect: pickMany("connect", ctx, 5, interestSet, feedback).map(toCandidate),
   };
 
   const presets = Object.values(contexts).map(c => ({
@@ -81,8 +87,8 @@ export default async function DashboardPage({
     href: `/dashboard?ctx=${c.id}`,
   }));
   const interestsArr = Array.from(interestSet).sort();
-  const reasonKey = (id: string) =>
-    `${id}::${ctx.id}::${interestsArr.join(",")}::s${patterns.saveCount}`;
+  const reasonKeyBase = `${ctx.id}::${interestsArr.join(",")}::s${patterns.saveCount}`;
+  const savedIdArr = Array.from(savedIds);
 
   return (
     <main className="min-h-screen bg-background px-5 pb-16 pt-7">
@@ -145,23 +151,17 @@ export default async function DashboardPage({
         {patterns.topTags.length > 0 && <NoticingBanner tags={patterns.topTags} />}
 
         <div className="flex flex-col gap-3">
-          {MODALITIES.map(cat => {
-            const item = picks[cat];
-            return (
-              <FeedCardLive
-                key={cat}
-                modality={cat}
-                itemId={item.id}
-                title={item.title}
-                meta={item.meta}
-                fallbackReason={item.fallback}
-                contextId={ctx.id}
-                interests={interestsArr}
-                reasonKey={reasonKey(item.id)}
-                isSaved={savedIds.has(item.id)}
-              />
-            );
-          })}
+          {MODALITIES.map(cat => (
+            <FeedCardLive
+              key={cat}
+              modality={cat}
+              candidates={candidates[cat]}
+              contextId={ctx.id}
+              interests={interestsArr}
+              savedIds={savedIdArr}
+              reasonKeyBase={reasonKeyBase}
+            />
+          ))}
         </div>
 
         <ContextSwitcher presets={presets} activeId={ctx.id} />

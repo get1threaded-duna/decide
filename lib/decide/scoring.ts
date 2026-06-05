@@ -38,4 +38,20 @@ export function pick(
   return filtered[idx] ? filtered[idx].it : ranked[0].it;
 }
 
+export function pickMany(
+  cat: Modality,
+  ctx: DecideContext,
+  count: number,
+  interests: ReadonlySet<string>,
+  feedback: FeedbackMap,
+  exclude: ReadonlySet<string> = new Set(),
+): Item[] {
+  return catalog[cat]
+    .map(it => ({ it, s: score(it, ctx, interests, feedback) + (it.id.charCodeAt(1) % 3) * 0.1 }))
+    .sort((a, b) => b.s - a.s)
+    .filter(r => feedback[r.it.id] !== "ignore" && !exclude.has(r.it.id))
+    .slice(0, count)
+    .map(r => r.it);
+}
+
 export const MODALITIES: Modality[] = ["eat", "watch", "listen", "read", "do", "connect"];

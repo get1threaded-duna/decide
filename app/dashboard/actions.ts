@@ -48,6 +48,27 @@ export async function toggleSave(itemId: string, category: Modality) {
   return { saved: true };
 }
 
+export async function logSwap(itemId: string, category: Modality) {
+  const supabase = createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error("Not authenticated");
+
+  const item = findItem(itemId);
+  if (!item) throw new Error(`Unknown item: ${itemId}`);
+
+  await supabase.from("feedback_log").insert({
+    user_id: user.id,
+    item_id: itemId,
+    action: "swap",
+    item_snapshot: {
+      id: item.id,
+      title: item.title,
+      tags: item.tags,
+      category,
+    },
+  });
+}
+
 export async function logIgnore(itemId: string, category: Modality) {
   const supabase = createClient();
   const { data: { user } } = await supabase.auth.getUser();

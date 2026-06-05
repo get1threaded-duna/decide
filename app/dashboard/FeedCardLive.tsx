@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
-import { Bookmark, Sparkles, ChefHat, Tv, BookOpen, Footprints, Headphones, HeartHandshake } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { Bookmark, RefreshCw, Sparkles, ChefHat, Tv, BookOpen, Footprints, Headphones, HeartHandshake } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { Modality } from "@/lib/decide/types";
-import { toggleSave } from "./actions";
+import { logSwap, toggleSave } from "./actions";
 
 const MODALITY_META: Record<Modality, { label: string; Icon: React.ElementType; colorVar: string; bgVar: string }> = {
   eat:     { label: "Eat",     Icon: ChefHat,        colorVar: "var(--cat-eat-color)",     bgVar: "var(--cat-eat-bg)"     },
@@ -15,39 +15,53 @@ const MODALITY_META: Record<Modality, { label: string; Icon: React.ElementType; 
   connect: { label: "Connect", Icon: HeartHandshake, colorVar: "var(--cat-connect-color)", bgVar: "var(--cat-connect-bg)" },
 };
 
-interface FeedCardLiveProps {
-  modality: Modality;
-  itemId: string;
+export interface CandidateItem {
+  id: string;
   title: string;
   meta: string;
-  fallbackReason: string;
+  fallback: string;
+}
+
+interface FeedCardLiveProps {
+  modality: Modality;
+  candidates: CandidateItem[];
   contextId: string;
   interests: string[];
-  reasonKey: string;
-  isSaved: boolean;
+  savedIds: string[];
+  reasonKeyBase: string;
 }
 
 export function FeedCardLive({
   modality,
-  itemId,
-  title,
-  meta,
-  fallbackReason,
+  candidates,
   contextId,
   interests,
-  reasonKey,
-  isSaved,
+  savedIds,
+  reasonKeyBase,
 }: FeedCardLiveProps) {
   const m = MODALITY_META[modality];
   const isConnect = modality === "connect";
 
+  const [pool, setPool] = useState<CandidateItem[]>(candidates);
+  const [idx, setIdx] = useState(0);
   const [reason, setReason] = useState("");
   const [streaming, setStreaming] = useState(true);
+  const [isFetchingMore, setIsFetchingMore] = useState(false);
   const [, startTransition] = useTransition();
-  // Track latest reasonKey to ignore stale stream chunks if the key changes mid-flight
+
+  const current = pool[idx] ?? pool[0] ?? null;
+  const reasonKey = current ? `${current.id}::${reasonKeyBase}` : "";
+
   const activeKeyRef = useRef(reasonKey);
+  const savedSet = useMemo(() => new Set(savedIds), [savedIds]);
+
+  // Track in-session saves so the Save chip updates immediately after a click
+  // (savedIds prop only refreshes after revalidatePath returns).
+  const [sessionSaved, setSessionSaved] = useState<Set<string>>(new Set());
+  const isSaved = current ? savedSet.has(current.id) || sessionSaved.has(current.id) : false;
 
   useEffect(() => {
+    if (!current) return;
     activeKeyRef.current = reasonKey;
     setReason("");
     setStreaming(true);
@@ -60,7 +74,7 @@ export function FeedCardLive({
         const res = await fetch("/api/reason", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ itemId, category: modality, contextId, interests }),
+          body: JSON.stringify({ itemId: current.id, category: modality, contextId, interests }),
           signal: controller.signal,
         });
         if (!res.ok || !res.body) throw new Error(`reason fetch failed: ${res.status}`);
@@ -78,20 +92,71 @@ export function FeedCardLive({
       } catch {
         if (controller.signal.aborted) return;
         if (activeKeyRef.current === localKey) {
-          setReason(fallbackReason);
+          setReason(current.fallback);
           setStreaming(false);
         }
       }
     })();
 
     return () => controller.abort();
-  }, [reasonKey, itemId, modality, contextId, interests, fallbackReason]);
+  }, [reasonKey, current, modality, contextId, interests]);
 
   const handleSave = () => {
+    if (!current) return;
+    const id = current.id;
+    setSessionSaved((s) => {
+      const next = new Set(s);
+      if (savedSet.has(id) || next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
     startTransition(async () => {
-      await toggleSave(itemId, modality);
+      await toggleSave(id, modality);
     });
   };
+
+  const handleSwap = async () => {
+    if (!current || isFetchingMore) return;
+    const swappedId = current.id;
+
+    // Fire-and-forget feedback log; UI shouldn't wait.
+    void logSwap(swappedId, modality);
+
+    const nextIdx = idx + 1;
+    if (nextIdx < pool.length) {
+      setIdx(nextIdx);
+      return;
+    }
+
+    // Pool exhausted — fetch more, excluding everything we've already shown.
+    setIsFetchingMore(true);
+    try {
+      const res = await fetch("/api/picks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          modality,
+          contextId,
+          exclude: pool.map((c) => c.id),
+          count: 5,
+        }),
+      });
+      if (res.ok) {
+        const { items } = (await res.json()) as { items: CandidateItem[] };
+        if (items.length > 0) {
+          setPool((p) => [...p, ...items]);
+          setIdx(nextIdx);
+          return;
+        }
+      }
+      // No new items available — cycle back to the top of the existing pool.
+      setIdx(0);
+    } finally {
+      setIsFetchingMore(false);
+    }
+  };
+
+  if (!current) return null;
 
   return (
     <article
@@ -114,25 +179,30 @@ export function FeedCardLive({
         </span>
       </div>
 
-      <h2 className="font-serif text-xl font-medium tracking-tight text-foreground mb-1">
-        {title}
-      </h2>
-      <p className="text-sm text-[var(--decide-text-secondary)] mb-2.5">{meta}</p>
-
       <div
-        className={cn(
-          "relative mb-3 min-h-6 rounded-r-lg py-2.5 pl-9 pr-3 text-sm leading-relaxed text-[#3D362C]",
-          "border-l-2 border-[var(--decide-accent)] bg-[var(--decide-surface-subtle)]",
-          isConnect && "border-[var(--cat-connect-color)] bg-[#FFF6EE]"
-        )}
+        key={current.id}
+        className="animate-[card-swap-in_240ms_ease-out]"
       >
-        <Sparkles
-          size={14}
-          className="absolute left-3 top-3"
-          style={{ color: isConnect ? "var(--cat-connect-color)" : "var(--decide-accent)" }}
-        />
-        {reason || <SkeletonReason />}
-        {streaming && reason && <Cursor />}
+        <h2 className="font-serif text-xl font-medium tracking-tight text-foreground mb-1">
+          {current.title}
+        </h2>
+        <p className="text-sm text-[var(--decide-text-secondary)] mb-2.5">{current.meta}</p>
+
+        <div
+          className={cn(
+            "relative mb-3 min-h-6 rounded-r-lg py-2.5 pl-9 pr-3 text-sm leading-relaxed text-[#3D362C]",
+            "border-l-2 border-[var(--decide-accent)] bg-[var(--decide-surface-subtle)]",
+            isConnect && "border-[var(--cat-connect-color)] bg-[#FFF6EE]"
+          )}
+        >
+          <Sparkles
+            size={14}
+            className="absolute left-3 top-3"
+            style={{ color: isConnect ? "var(--cat-connect-color)" : "var(--decide-accent)" }}
+          />
+          {reason || <SkeletonReason />}
+          {streaming && reason && <Cursor />}
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-1.5">
@@ -146,6 +216,18 @@ export function FeedCardLive({
           )}
         >
           <Bookmark size={13} /> {isSaved ? "Saved" : "Save"}
+        </button>
+        <button
+          onClick={handleSwap}
+          disabled={isFetchingMore}
+          aria-label="Swap to a different recommendation"
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs transition-colors",
+            "border-[var(--decide-border-warm)] text-[var(--decide-text-tertiary)] hover:bg-[var(--decide-surface-subtle)] hover:border-[#C2B8A5]",
+            "disabled:opacity-50 disabled:cursor-not-allowed"
+          )}
+        >
+          <RefreshCw size={13} className={cn(isFetchingMore && "animate-spin")} /> Swap
         </button>
       </div>
     </article>
