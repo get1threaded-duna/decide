@@ -1,3 +1,5 @@
+"use client";
+
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import {
   LineChart, Line, XAxis, YAxis, ReferenceLine, ResponsiveContainer, Tooltip,
@@ -7,11 +9,12 @@ import {
   ArrowUpRight, ArrowDownRight, Minus, Zap, Target, Moon, Footprints, Flame,
   RefreshCw, Link2, Trophy,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
 /* ============================================================================
    HEALTHY GAIN TRACKER  —  offline-first, wearable-ready
    ----------------------------------------------------------------------------
-   • Runs fully offline. State persists via window.storage (no network needed).
+   • Runs fully offline. State persists via localStorage (no network needed).
    • Adaptive calorie engine: recomputes maintenance as your logged weight rises.
    • PACE engine: compares your 7-day weight trend to your target rate and tells
      you exactly how many calories to add or cut (the playbook's adaptive rule).
@@ -25,20 +28,68 @@ const C = {
   gold: "#E0A82E", goldSoft: "rgba(224,168,46,0.12)", text: "#EDEFF2",
   muted: "#8A93A3", green: "#3FB68B", greenSoft: "rgba(63,182,139,0.12)",
   red: "#E06A4E", redSoft: "rgba(224,106,78,0.12)", blue: "#5B9BD5",
-};
+} as const;
 
 const STORE_KEY = "gain-tracker-v1";
 const todayStr = () => new Date().toISOString().slice(0, 10);
-const ACTIVITY = { sedentary: 1.3, light: 1.45, moderate: 1.55, active: 1.7, athlete: 1.85 };
+
+type Sex = "male" | "female";
+type Activity = "sedentary" | "light" | "moderate" | "active" | "athlete";
+
+const ACTIVITY: Record<Activity, number> = {
+  sedentary: 1.3, light: 1.45, moderate: 1.55, active: 1.7, athlete: 1.85,
+};
+
+/* ---------- data model ---------- */
+interface Profile {
+  heightIn: number;
+  weightLb: number;
+  age: number;
+  sex: Sex;
+  activity: Activity;
+  goalLb: number;
+  _seedWeight?: boolean;
+}
+interface WeightEntry { date: string; lb: number; }
+interface DayIntake { cal: number; protein: number; }
+interface Workout { date: string; exercise: string; weight: number; reps: number; }
+interface WearableMetrics {
+  steps: number;
+  activeCal: number;
+  sleepHr: number;
+  restingHr: number;
+  weight: number;
+  syncedAt: string;
+}
+interface WearableState { connected: boolean; metrics: WearableMetrics | null; }
+interface AppState {
+  profile: Profile | null;
+  weights: WeightEntry[];
+  intake: Record<string, DayIntake>;
+  workouts: Workout[];
+  surplus: number;
+  wearable: WearableState;
+}
+
+type TabId = "home" | "weight" | "eat" | "train" | "sync";
+type Patch = Partial<AppState> | ((prev: AppState) => AppState);
+type Updater = (patch: Patch) => void;
 
 /* ---------- pure fitness math ---------- */
-function maintenanceCal({ weightLb, heightIn, age, sex, activity }) {
+interface MaintenanceInput {
+  weightLb: number;
+  heightIn: number;
+  age: number;
+  sex: Sex;
+  activity: Activity;
+}
+function maintenanceCal({ weightLb, heightIn, age, sex, activity }: MaintenanceInput) {
   const kg = weightLb / 2.2046, cm = heightIn * 2.54;
   const bmr = 10 * kg + 6.25 * cm - 5 * age + (sex === "female" ? -161 : 5);
   return Math.round(bmr * (ACTIVITY[activity] || 1.55));
 }
 // least-squares slope over weight logs -> lb/week
-function weeklyRate(weights) {
+function weeklyRate(weights: WeightEntry[] | undefined): number | null {
   if (!weights || weights.length < 2) return null;
   const pts = [...weights]
     .sort((a, b) => a.date.localeCompare(b.date))
@@ -52,7 +103,7 @@ function weeklyRate(weights) {
   if (den === 0) return null;
   return (num / den) * 7; // lb per week
 }
-function rollingAvg(weights, days = 7) {
+function rollingAvg(weights: WeightEntry[] | undefined, days = 7): number | null {
   if (!weights || !weights.length) return null;
   const cutoff = Date.now() - days * 86400000;
   const recent = weights.filter((w) => new Date(w.date).getTime() >= cutoff);
@@ -68,15 +119,15 @@ function rollingAvg(weights, days = 7) {
    ========================================================================== */
 const WearableProvider = {
   name: "Wearable (demo)",
-  async connect() {
+  async connect(): Promise<{ ok: boolean }> {
     // Real impl: request HealthKit / Health Connect / Fitbit OAuth permissions.
     await new Promise((r) => setTimeout(r, 500));
     return { ok: true };
   },
-  async sync(currentWeight) {
+  async sync(currentWeight: number): Promise<WearableMetrics> {
     // Real impl: read today's samples from the health store and normalize to this shape.
     await new Promise((r) => setTimeout(r, 600));
-    const jitter = (b, s) => Math.round(b + (Math.random() - 0.5) * s);
+    const jitter = (b: number, s: number) => Math.round(b + (Math.random() - 0.5) * s);
     return {
       steps: jitter(8200, 3000),
       activeCal: jitter(430, 160),   // active energy burned today
@@ -89,7 +140,7 @@ const WearableProvider = {
 };
 
 /* ---------- storage ---------- */
-const blankState = {
+const blankState: AppState = {
   profile: null,
   weights: [],
   intake: {},        // { 'YYYY-MM-DD': { cal, protein } }
@@ -98,35 +149,36 @@ const blankState = {
   wearable: { connected: false, metrics: null },
 };
 
-async function loadState() {
+function loadState(): AppState | null {
   try {
-    if (typeof window !== "undefined" && window.storage) {
-      const res = await window.storage.get(STORE_KEY);
-      if (res && res.value) return { ...blankState, ...JSON.parse(res.value) };
+    if (typeof window !== "undefined") {
+      const raw = window.localStorage.getItem(STORE_KEY);
+      if (raw) return { ...blankState, ...(JSON.parse(raw) as Partial<AppState>) };
     }
-  } catch (_) { /* no saved state yet */ }
+  } catch { /* no saved state yet */ }
   return null; // signals "not found"
 }
-async function saveState(state) {
+function saveState(state: AppState) {
   try {
-    if (typeof window !== "undefined" && window.storage) {
-      await window.storage.set(STORE_KEY, JSON.stringify(state));
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(STORE_KEY, JSON.stringify(state));
     }
   } catch (e) { console.error("save failed", e); }
 }
 
 /* ---------- tiny UI atoms ---------- */
-const Card = ({ children, style }) => (
+const Card = ({ children, style }: { children: React.ReactNode; style?: React.CSSProperties }) => (
   <div style={{ background: C.surface, border: `1px solid ${C.line}`, borderRadius: 16, padding: 16, ...style }}>
     {children}
   </div>
 );
-const Eyebrow = ({ children }) => (
+const Eyebrow = ({ children }: { children: React.ReactNode }) => (
   <div style={{ fontSize: 10, letterSpacing: "0.16em", textTransform: "uppercase", color: C.gold, fontWeight: 700 }}>
     {children}
   </div>
 );
-function Ring({ value, target, label, unit, color }) {
+function Ring({ value, target, label, unit, color }:
+  { value: number; target: number; label: string; unit?: string; color: string }) {
   const pct = target > 0 ? Math.min(value / target, 1.15) : 0;
   const r = 34, circ = 2 * Math.PI * r;
   return (
@@ -147,18 +199,20 @@ function Ring({ value, target, label, unit, color }) {
     </div>
   );
 }
-const Btn = ({ children, onClick, kind = "gold", style }) => {
-  const base = { border: "none", borderRadius: 12, fontWeight: 700, fontSize: 14,
+const Btn = ({ children, onClick, kind = "gold", style }:
+  { children: React.ReactNode; onClick?: () => void; kind?: "gold" | "ghost" | "dark"; style?: React.CSSProperties }) => {
+  const base: React.CSSProperties = { border: "none", borderRadius: 12, fontWeight: 700, fontSize: 14,
     padding: "12px 16px", cursor: "pointer", display: "inline-flex", alignItems: "center",
     justifyContent: "center", gap: 8, width: "100%" };
-  const kinds = {
+  const kinds: Record<"gold" | "ghost" | "dark", React.CSSProperties> = {
     gold: { background: C.gold, color: "#14171C" },
     ghost: { background: "transparent", color: C.text, border: `1px solid ${C.line}` },
     dark: { background: C.surface2, color: C.text, border: `1px solid ${C.line}` },
   };
   return <button onClick={onClick} style={{ ...base, ...kinds[kind], ...style }}>{children}</button>;
 };
-const Field = ({ label, ...props }) => (
+const Field = ({ label, ...props }:
+  { label: string } & React.InputHTMLAttributes<HTMLInputElement>) => (
   <label style={{ display: "block", marginBottom: 12 }}>
     <span style={{ fontSize: 11, color: C.muted, display: "block", marginBottom: 5 }}>{label}</span>
     <input {...props} style={{ width: "100%", background: C.bg, border: `1px solid ${C.line}`,
@@ -169,21 +223,20 @@ const Field = ({ label, ...props }) => (
 /* ============================================================================
    APP
    ========================================================================== */
-export default function App() {
-  const [state, setState] = useState(null);   // null = loading
-  const [tab, setTab] = useState("home");
+export default function HealthyGainTracker() {
+  const [state, setState] = useState<AppState | null>(null);   // null = loading
+  const [tab, setTab] = useState<TabId>("home");
   const [needsSetup, setNeedsSetup] = useState(false);
 
   useEffect(() => {
-    (async () => {
-      const loaded = await loadState();
-      if (loaded && loaded.profile) { setState(loaded); }
-      else { setState({ ...blankState }); setNeedsSetup(true); }
-    })();
+    const loaded = loadState();
+    if (loaded && loaded.profile) { setState(loaded); }
+    else { setState({ ...blankState }); setNeedsSetup(true); }
   }, []);
 
-  const update = useCallback((patch) => {
+  const update = useCallback<Updater>((patch) => {
     setState((prev) => {
+      if (!prev) return prev;
       const next = typeof patch === "function" ? patch(prev) : { ...prev, ...patch };
       saveState(next);
       return next;
@@ -203,9 +256,9 @@ export default function App() {
   const today = state.intake[todayStr()] || { cal: 0, protein: 0 };
   const rate = weeklyRate(state.weights);
 
-  const shared = { state, update, curWeight, maintenance, targetCal, proteinTarget, today, rate, setTab };
+  const shared: Shared = { state, update, curWeight, maintenance, targetCal, proteinTarget, today, rate, setTab };
 
-  const TABS = [
+  const TABS: [TabId, LucideIcon, string][] = [
     ["home", Home, "Home"], ["weight", TrendingUp, "Weight"], ["eat", Utensils, "Eat"],
     ["train", Dumbbell, "Train"], ["sync", Watch, "Sync"],
   ];
@@ -253,6 +306,18 @@ export default function App() {
   );
 }
 
+interface Shared {
+  state: AppState;
+  update: Updater;
+  curWeight: number;
+  maintenance: number;
+  targetCal: number;
+  proteinTarget: number;
+  today: DayIntake;
+  rate: number | null;
+  setTab: (t: TabId) => void;
+}
+
 /* ---------- Loading ---------- */
 const Loading = () => (
   <div style={{ background: C.bg, color: C.muted, minHeight: "100vh", display: "flex",
@@ -262,13 +327,21 @@ const Loading = () => (
 );
 
 /* ---------- Setup / onboarding ---------- */
-function Setup({ state, onDone }) {
-  const p = state.profile || {};
-  const [f, setF] = useState({
+interface SetupForm {
+  heightIn: number;
+  weightLb: number;
+  age: number;
+  sex: Sex;
+  activity: Activity;
+  goalLb: number;
+}
+function Setup({ state, onDone }: { state: AppState; onDone: (p: Profile) => void }) {
+  const p = state.profile || ({} as Partial<Profile>);
+  const [f, setF] = useState<SetupForm>({
     heightIn: p.heightIn || 67, weightLb: p.weightLb || 150, age: p.age || 30,
     sex: p.sex || "male", activity: p.activity || "moderate", goalLb: p.goalLb || 178,
   });
-  const set = (k, v) => setF((s) => ({ ...s, [k]: v }));
+  const set = <K extends keyof SetupForm>(k: K, v: SetupForm[K]) => setF((s) => ({ ...s, [k]: v }));
   const preview = maintenanceCal(f);
 
   return (
@@ -297,7 +370,7 @@ function Setup({ state, onDone }) {
           <div style={{ marginBottom: 12 }}>
             <span style={{ fontSize: 11, color: C.muted, display: "block", marginBottom: 6 }}>Sex (for BMR formula)</span>
             <div className="flex gap-2">
-              {["male", "female"].map((s) => (
+              {(["male", "female"] as Sex[]).map((s) => (
                 <button key={s} onClick={() => set("sex", s)} style={{ flex: 1, padding: "9px",
                   borderRadius: 10, cursor: "pointer", fontWeight: 600, fontSize: 13,
                   background: f.sex === s ? C.goldSoft : C.bg, color: f.sex === s ? C.gold : C.muted,
@@ -308,7 +381,7 @@ function Setup({ state, onDone }) {
           <div>
             <span style={{ fontSize: 11, color: C.muted, display: "block", marginBottom: 6 }}>Training activity</span>
             <div className="grid grid-cols-3 gap-2">
-              {Object.keys(ACTIVITY).map((a) => (
+              {(Object.keys(ACTIVITY) as Activity[]).map((a) => (
                 <button key={a} onClick={() => set("activity", a)} style={{ padding: "9px 4px",
                   borderRadius: 10, cursor: "pointer", fontWeight: 600, fontSize: 12,
                   background: f.activity === a ? C.goldSoft : C.bg, color: f.activity === a ? C.gold : C.muted,
@@ -341,11 +414,11 @@ function Setup({ state, onDone }) {
 }
 
 /* ---------- HOME ---------- */
-function HomeTab({ state, curWeight, maintenance, targetCal, proteinTarget, today, rate, setTab }) {
+function HomeTab({ state, curWeight, maintenance, targetCal, proteinTarget, today, rate, setTab }: Shared) {
   const start = state.weights.length
     ? [...state.weights].sort((a, b) => a.date.localeCompare(b.date))[0].lb
-    : state.profile.weightLb;
-  const goal = state.profile.goalLb;
+    : state.profile!.weightLb;
+  const goal = state.profile!.goalLb;
   const gained = curWeight - start;
   const toGo = goal - curWeight;
   const progPct = Math.max(0, Math.min(1, (curWeight - start) / (goal - start || 1)));
@@ -385,7 +458,7 @@ function HomeTab({ state, curWeight, maintenance, targetCal, proteinTarget, toda
       {/* today's fuel */}
       <Card style={{ marginTop: 14 }}>
         <div className="flex items-center justify-between" style={{ marginBottom: 14 }}>
-          <Eyebrow>Today's fuel</Eyebrow>
+          <Eyebrow>Today&apos;s fuel</Eyebrow>
           <button onClick={() => setTab("eat")} style={{ background: "none", border: "none", color: C.gold,
             fontSize: 12, fontWeight: 700, cursor: "pointer", display: "flex", alignItems: "center", gap: 3 }}>
             Log <Plus size={13} />
@@ -408,8 +481,9 @@ function HomeTab({ state, curWeight, maintenance, targetCal, proteinTarget, toda
   );
 }
 
-function PaceCard({ rate, state }) {
-  let status, color, soft, Icon, headline, advice;
+function PaceCard({ rate }: { rate: number | null; state: AppState }) {
+  let status: string, color: string, soft: string, Icon: LucideIcon,
+    headline: string, advice: string;
   if (rate == null) {
     status = "Need data"; color = C.muted; soft = C.surface2; Icon = Minus;
     headline = "Log 2+ weigh-ins"; advice = "Add a few days of weight so PACE can read your trend.";
@@ -444,7 +518,7 @@ function PaceCard({ rate, state }) {
 }
 
 /* ---------- WEIGHT ---------- */
-function WeightTab({ state, update, rate }) {
+function WeightTab({ state, update, rate }: Shared) {
   const [val, setVal] = useState("");
   const sorted = [...state.weights].sort((a, b) => a.date.localeCompare(b.date));
   const chartData = sorted.map((w) => ({ date: w.date.slice(5), lb: w.lb }));
@@ -497,7 +571,7 @@ function WeightTab({ state, update, rate }) {
                   stroke={C.line} width={34} />
                 <Tooltip contentStyle={{ background: C.surface2, border: `1px solid ${C.line}`,
                   borderRadius: 10, color: C.text }} labelStyle={{ color: C.muted }} />
-                <ReferenceLine y={state.profile.goalLb} stroke={C.gold} strokeDasharray="4 4"
+                <ReferenceLine y={state.profile!.goalLb} stroke={C.gold} strokeDasharray="4 4"
                   label={{ value: "goal", fill: C.gold, fontSize: 10, position: "insideTopRight" }} />
                 <Line type="monotone" dataKey="lb" stroke={C.gold} strokeWidth={2.5}
                   dot={{ r: 3, fill: C.gold }} activeDot={{ r: 5 }} />
@@ -514,12 +588,12 @@ function WeightTab({ state, update, rate }) {
 }
 
 /* ---------- EAT ---------- */
-function EatTab({ state, update, targetCal, proteinTarget, today }) {
+function EatTab({ update, targetCal, proteinTarget, today }: Shared) {
   const [cal, setCal] = useState("");
   const [pro, setPro] = useState("");
   const key = todayStr();
 
-  const addLog = (c, p) => update((prev) => {
+  const addLog = (c: number, p: number) => update((prev) => {
     const cur = prev.intake[key] || { cal: 0, protein: 0 };
     return { ...prev, intake: { ...prev.intake, [key]: { cal: cur.cal + c, protein: cur.protein + p } } };
   });
@@ -588,7 +662,7 @@ function EatTab({ state, update, targetCal, proteinTarget, today }) {
 }
 
 /* ---------- TRAIN ---------- */
-function TrainTab({ state, update }) {
+function TrainTab({ state, update }: Shared) {
   const [ex, setEx] = useState("");
   const [wt, setWt] = useState("");
   const [reps, setReps] = useState("");
@@ -602,7 +676,7 @@ function TrainTab({ state, update }) {
 
   // last top set per exercise (for progressive-overload glance)
   const bests = useMemo(() => {
-    const m = {};
+    const m: Record<string, Workout> = {};
     [...state.workouts].sort((a, b) => b.date.localeCompare(a.date)).forEach((w) => {
       if (!m[w.exercise]) m[w.exercise] = w;
     });
@@ -657,7 +731,7 @@ function TrainTab({ state, update }) {
 }
 
 /* ---------- SYNC (wearable) ---------- */
-function SyncTab({ state, update, curWeight }) {
+function SyncTab({ state, update, curWeight }: Shared) {
   const [busy, setBusy] = useState(false);
   const w = state.wearable;
 
@@ -680,12 +754,13 @@ function SyncTab({ state, update, curWeight }) {
   };
   const disconnect = () => update((prev) => ({ ...prev, wearable: { connected: false, metrics: null } }));
 
-  const metricRows = w.metrics ? [
-    { Icon: Footprints, label: "Steps", val: w.metrics.steps.toLocaleString() },
-    { Icon: Flame, label: "Active energy", val: `${w.metrics.activeCal} cal` },
-    { Icon: Moon, label: "Sleep", val: `${w.metrics.sleepHr} hr` },
-    { Icon: TrendingUp, label: "Resting HR", val: `${w.metrics.restingHr} bpm` },
-  ] : [];
+  const metricRows: { Icon: LucideIcon; label: string; val: string }[] =
+    w.metrics ? [
+      { Icon: Footprints, label: "Steps", val: w.metrics.steps.toLocaleString() },
+      { Icon: Flame, label: "Active energy", val: `${w.metrics.activeCal} cal` },
+      { Icon: Moon, label: "Sleep", val: `${w.metrics.sleepHr} hr` },
+      { Icon: TrendingUp, label: "Resting HR", val: `${w.metrics.restingHr} bpm` },
+    ] : [];
 
   return (
     <>
