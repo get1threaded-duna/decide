@@ -10,6 +10,10 @@ import {
   RefreshCw, Link2, Trophy,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import {
+  resolveHealthProvider, mockProvider,
+  type HealthMetrics, type HealthProvider,
+} from "@/lib/health";
 
 /* ============================================================================
    HEALTHY GAIN TRACKER  —  offline-first, wearable-ready
@@ -18,9 +22,9 @@ import type { LucideIcon } from "lucide-react";
    • Adaptive calorie engine: recomputes maintenance as your logged weight rises.
    • PACE engine: compares your 7-day weight trend to your target rate and tells
      you exactly how many calories to add or cut (the playbook's adaptive rule).
-   • WEARABLE HOOK: see `WearableProvider` below. It's a clean abstraction with a
-     mock sync today. Swap the `sync()` body for Apple HealthKit / Android Health
-     Connect / Fitbit / Garmin later — the rest of the app doesn't change.
+   • WEARABLE HOOK: the Sync tab talks to a pluggable `HealthProvider` from
+     `lib/health`. A mock provider drives the demo; Apple Health / Fitbit /
+     Health Connect / Garmin slot in behind the same contract — see that folder.
    ========================================================================== */
 
 const C = {
@@ -53,15 +57,7 @@ interface Profile {
 interface WeightEntry { date: string; lb: number; }
 interface DayIntake { cal: number; protein: number; }
 interface Workout { date: string; exercise: string; weight: number; reps: number; }
-interface WearableMetrics {
-  steps: number;
-  activeCal: number;
-  sleepHr: number;
-  restingHr: number;
-  weight: number;
-  syncedAt: string;
-}
-interface WearableState { connected: boolean; metrics: WearableMetrics | null; }
+interface WearableState { connected: boolean; metrics: HealthMetrics | null; }
 interface AppState {
   profile: Profile | null;
   weights: WeightEntry[];
@@ -110,34 +106,6 @@ function rollingAvg(weights: WeightEntry[] | undefined, days = 7): number | null
   const set = recent.length ? recent : weights.slice(-1);
   return set.reduce((s, w) => s + w.lb, 0) / set.length;
 }
-
-/* ============================================================================
-   WEARABLE PROVIDER  —  the integration hook
-   Today: returns mock data so the UI is fully wired.
-   Later: replace `sync()` with a real bridge. The shape it returns is the
-   contract the whole app depends on — keep these keys and everything works.
-   ========================================================================== */
-const WearableProvider = {
-  name: "Wearable (demo)",
-  async connect(): Promise<{ ok: boolean }> {
-    // Real impl: request HealthKit / Health Connect / Fitbit OAuth permissions.
-    await new Promise((r) => setTimeout(r, 500));
-    return { ok: true };
-  },
-  async sync(currentWeight: number): Promise<WearableMetrics> {
-    // Real impl: read today's samples from the health store and normalize to this shape.
-    await new Promise((r) => setTimeout(r, 600));
-    const jitter = (b: number, s: number) => Math.round(b + (Math.random() - 0.5) * s);
-    return {
-      steps: jitter(8200, 3000),
-      activeCal: jitter(430, 160),   // active energy burned today
-      sleepHr: +(6.8 + Math.random() * 1.6).toFixed(1),
-      restingHr: jitter(58, 6),
-      weight: +(currentWeight + (Math.random() - 0.4) * 0.4).toFixed(1), // synced scale
-      syncedAt: new Date().toISOString(),
-    };
-  },
-};
 
 /* ---------- storage ---------- */
 const blankState: AppState = {
@@ -733,26 +701,49 @@ function TrainTab({ state, update }: Shared) {
 /* ---------- SYNC (wearable) ---------- */
 function SyncTab({ state, update, curWeight }: Shared) {
   const [busy, setBusy] = useState(false);
+  const [provider, setProvider] = useState<HealthProvider>(mockProvider);
   const w = state.wearable;
+
+  // Pick the best provider for this environment (native HealthKit / Fitbit /
+  // …), falling back to the mock in a plain browser.
+  useEffect(() => {
+    let active = true;
+    resolveHealthProvider().then((p) => { if (active) setProvider(p); });
+    return () => { active = false; };
+  }, []);
 
   const connect = async () => {
     setBusy(true);
-    const res = await WearableProvider.connect();
-    if (res.ok) update((prev) => ({ ...prev, wearable: { ...prev.wearable, connected: true } }));
-    setBusy(false);
+    try {
+      const res = await provider.connect();
+      if (res.ok) update((prev) => ({ ...prev, wearable: { ...prev.wearable, connected: true } }));
+      else console.error("connect rejected", res.error);
+    } catch (e) {
+      console.error("connect failed", e);
+    } finally {
+      setBusy(false);
+    }
   };
   const sync = async () => {
     setBusy(true);
-    const m = await WearableProvider.sync(curWeight);
-    update((prev) => {
-      // synced scale weight flows into the weight log automatically
-      const others = prev.weights.filter((x) => x.date !== todayStr());
-      const weights = m.weight ? [...others, { date: todayStr(), lb: m.weight }] : prev.weights;
-      return { ...prev, weights, wearable: { connected: true, metrics: m } };
-    });
-    setBusy(false);
+    try {
+      const m = await provider.sync(curWeight);
+      update((prev) => {
+        // synced scale weight flows into the weight log automatically
+        const others = prev.weights.filter((x) => x.date !== todayStr());
+        const weights = m.weight ? [...others, { date: todayStr(), lb: m.weight }] : prev.weights;
+        return { ...prev, weights, wearable: { connected: true, metrics: m } };
+      });
+    } catch (e) {
+      console.error("sync failed", e);
+    } finally {
+      setBusy(false);
+    }
   };
-  const disconnect = () => update((prev) => ({ ...prev, wearable: { connected: false, metrics: null } }));
+  const disconnect = () => {
+    void provider.disconnect?.();
+    update((prev) => ({ ...prev, wearable: { connected: false, metrics: null } }));
+  };
 
   const metricRows: { Icon: LucideIcon; label: string; val: string }[] =
     w.metrics ? [
@@ -774,7 +765,7 @@ function SyncTab({ state, update, curWeight }: Shared) {
             </p>
             <Btn onClick={connect} kind="gold">
               {busy ? <RefreshCw size={17} className="animate-spin" /> : <Link2 size={17} />}
-              {busy ? "Connecting…" : "Connect device"}
+              {busy ? "Connecting…" : `Connect ${provider.name}`}
             </Btn>
           </>
         ) : (
@@ -817,9 +808,12 @@ function SyncTab({ state, update, curWeight }: Shared) {
 
       <Card style={{ background: C.surface2 }}>
         <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.6 }}>
-          <b style={{ color: C.text }}>Developer note:</b> this screen runs on a <code style={{ color: C.gold }}>WearableProvider</code> abstraction.
-          It uses demo data now. Swap the <code style={{ color: C.gold }}>connect()</code> and <code style={{ color: C.gold }}>sync()</code> methods
-          for Apple HealthKit, Android Health Connect, Fitbit, or Garmin — the return shape is the only contract, so nothing else changes.
+          <b style={{ color: C.text }}>Developer note:</b> this screen talks to a pluggable{" "}
+          <code style={{ color: C.gold }}>HealthProvider</code> from <code style={{ color: C.gold }}>lib/health</code>.
+          Active source: <b style={{ color: C.text }}>{provider.name}</b>. The resolver auto-selects the best
+          available provider and falls back to the demo mock in a plain browser. Apple Health (needs a native
+          shell), Fitbit (web OAuth), Health Connect, and Garmin are stubbed there behind the same contract —
+          normalizing to <code style={{ color: C.gold }}>HealthMetrics</code> is the only thing a new source has to do.
         </div>
       </Card>
     </>
